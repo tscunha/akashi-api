@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-this-jwt-secret-in-production"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
+    jwt_refresh_token_expire_days: int = 7
+    jwt_refresh_token_rotate: bool = True  # Issue new refresh token on use
+
+    # Rate Limiting
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 100  # Requests per window
+    rate_limit_window_seconds: int = 60  # Window size in seconds
 
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:5173"

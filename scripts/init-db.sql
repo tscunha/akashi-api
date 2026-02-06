@@ -579,6 +579,138 @@ CREATE TRIGGER trg_check_tech_meta_asset
     FOR EACH ROW EXECUTE FUNCTION check_tech_meta_asset_exists();
 
 -- ============================================================================
+-- TABLE: users
+-- ============================================================================
+
+CREATE TABLE users (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES tenants(id),
+
+    email                   VARCHAR(255) NOT NULL,
+    password_hash           VARCHAR(255) NOT NULL,
+    full_name               VARCHAR(255),
+
+    role                    VARCHAR(50) DEFAULT 'user'
+                            CHECK (role IN ('admin', 'manager', 'editor', 'viewer', 'user')),
+
+    is_active               BOOLEAN DEFAULT true,
+    is_superuser            BOOLEAN DEFAULT false,
+
+    last_login_at           TIMESTAMP WITH TIME ZONE,
+    password_changed_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+    created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+    UNIQUE (tenant_id, email)
+);
+
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_tenant ON users(tenant_id);
+CREATE INDEX idx_users_active ON users(tenant_id, is_active) WHERE is_active = true;
+
+CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- TABLE: collections
+-- ============================================================================
+
+CREATE TABLE collections (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID NOT NULL REFERENCES tenants(id),
+
+    name                    VARCHAR(255) NOT NULL,
+    description             TEXT,
+    slug                    VARCHAR(255),
+
+    collection_type         VARCHAR(50) DEFAULT 'manual'
+                            CHECK (collection_type IN ('manual', 'smart', 'system')),
+
+    -- Smart collection filter (JSON query for dynamic collections)
+    filter_query            JSONB,
+
+    -- Display settings
+    cover_asset_id          UUID,  -- Asset used as cover image
+    color                   VARCHAR(20),  -- Hex color for UI
+    icon                    VARCHAR(50),  -- Icon name
+
+    is_public               BOOLEAN DEFAULT false,
+    is_locked               BOOLEAN DEFAULT false,  -- Prevent modifications
+
+    item_count              INTEGER DEFAULT 0,  -- Denormalized for performance
+
+    created_by              UUID REFERENCES users(id),
+    updated_by              UUID REFERENCES users(id),
+
+    created_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at              TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+    UNIQUE (tenant_id, slug)
+);
+
+CREATE INDEX idx_collections_tenant ON collections(tenant_id);
+CREATE INDEX idx_collections_type ON collections(tenant_id, collection_type);
+CREATE INDEX idx_collections_created_by ON collections(created_by);
+
+CREATE TRIGGER trg_collections_updated_at BEFORE UPDATE ON collections FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- TABLE: collection_items
+-- ============================================================================
+
+CREATE TABLE collection_items (
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    collection_id           UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    asset_id                UUID NOT NULL,
+    tenant_id               UUID NOT NULL REFERENCES tenants(id),
+
+    position                INTEGER DEFAULT 0,  -- For manual ordering
+    added_by                UUID REFERENCES users(id),
+    added_at                TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+    note                    TEXT,  -- Optional note about why this asset is in the collection
+
+    UNIQUE (collection_id, asset_id)
+);
+
+CREATE INDEX idx_collection_items_collection ON collection_items(collection_id);
+CREATE INDEX idx_collection_items_asset ON collection_items(asset_id);
+CREATE INDEX idx_collection_items_position ON collection_items(collection_id, position);
+
+-- ============================================================================
+-- FULL-TEXT SEARCH: Add tsvector column to assets
+-- ============================================================================
+
+-- Add search vector column
+ALTER TABLE assets ADD COLUMN IF NOT EXISTS search_vector tsvector;
+
+-- Create GIN index for fast full-text search
+CREATE INDEX IF NOT EXISTS idx_assets_search ON assets USING gin(search_vector);
+
+-- Function to update search vector
+CREATE OR REPLACE FUNCTION assets_search_vector_update() RETURNS TRIGGER AS $$
+BEGIN
+    NEW.search_vector :=
+        setweight(to_tsvector('portuguese', coalesce(NEW.title, '')), 'A') ||
+        setweight(to_tsvector('portuguese', coalesce(NEW.description, '')), 'B') ||
+        setweight(to_tsvector('portuguese', coalesce(NEW.code, '')), 'C');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to auto-update search vector
+DROP TRIGGER IF EXISTS trg_assets_search_vector ON assets;
+CREATE TRIGGER trg_assets_search_vector
+    BEFORE INSERT OR UPDATE OF title, description, code ON assets
+    FOR EACH ROW EXECUTE FUNCTION assets_search_vector_update();
+
+-- Update existing assets (run once)
+UPDATE assets SET search_vector =
+    setweight(to_tsvector('portuguese', coalesce(title, '')), 'A') ||
+    setweight(to_tsvector('portuguese', coalesce(description, '')), 'B') ||
+    setweight(to_tsvector('portuguese', coalesce(code, '')), 'C');
+
+-- ============================================================================
 -- SEED DATA: Development tenant
 -- ============================================================================
 

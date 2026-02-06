@@ -2,23 +2,34 @@
 AKASHI MAM API - Main Application
 """
 
+import logging
+import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 from app.core.database import close_db
+from app.core.rate_limit import close_redis, rate_limit_middleware
 from app.api.v1.router import api_router
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
+    logger.info("Starting AKASHI MAM API...")
     yield
     # Shutdown
+    logger.info("Shutting down AKASHI MAM API...")
     await close_db()
+    await close_redis()
 
 
 def create_app() -> FastAPI:
@@ -42,6 +53,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Rate limiting middleware (only if enabled)
+    if settings.rate_limit_enabled:
+        app.middleware("http")(rate_limit_middleware)
+
     # Include API router
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
@@ -50,6 +65,17 @@ def create_app() -> FastAPI:
 
 # Create app instance
 app = create_app()
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to log all errors."""
+    logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}")
+    logger.error(traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "type": type(exc).__name__},
+    )
 
 
 @app.get("/")

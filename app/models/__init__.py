@@ -10,6 +10,11 @@ from app.models.asset_storage import (
     AssetTechnicalMetadata,
     IngestJob,
 )
+from app.models.keyword import AssetKeyword
+from app.models.marker import AssetMarker
+from app.models.user import User
+from app.models.collection import Collection, CollectionItem
+from app.models.refresh_token import RefreshToken
 
 __all__ = [
     "Base",
@@ -18,4 +23,10 @@ __all__ = [
     "AssetStorageLocation",
     "AssetTechnicalMetadata",
     "IngestJob",
+    "AssetKeyword",
+    "AssetMarker",
+    "User",
+    "Collection",
+    "CollectionItem",
+    "RefreshToken",
 ]

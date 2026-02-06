@@ -6,12 +6,18 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models import Tenant
+from app.core.security import decode_access_token
+from app.models import Tenant, User
 from app.schemas import PaginationParams
+
+
+# HTTP Bearer token security scheme
+security = HTTPBearer(auto_error=False)
 
 
 # Type aliases for dependency injection
@@ -48,3 +54,111 @@ async def get_pagination(
 
 # Type aliases
 Pagination = Annotated[PaginationParams, Depends(get_pagination)]
+
+
+# =============================================================================
+# Authentication Dependencies
+# =============================================================================
+
+
+async def get_current_user(
+    db: AsyncSession = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> User:
+    """
+    Get the current authenticated user from JWT token.
+
+    Raises HTTPException 401 if token is invalid or user not found.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if not credentials:
+        raise credentials_exception
+
+    payload = decode_access_token(credentials.credentials)
+    if payload is None:
+        raise credentials_exception
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
+
+    # Get user from database
+    result = await db.execute(
+        select(User).where(User.id == UUID(user_id))
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise credentials_exception
+
+    return user
+
+
+async def get_current_active_user(
+    current_user: "User" = Depends(get_current_user),
+) -> User:
+    """
+    Get the current authenticated user, ensuring they are active.
+
+    Raises HTTPException 403 if user is inactive.
+    """
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user",
+        )
+    return current_user
+
+
+async def get_current_superuser(
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    """
+    Get the current user, ensuring they are a superuser.
+
+    Raises HTTPException 403 if user is not a superuser.
+    """
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Superuser privileges required",
+        )
+    return current_user
+
+
+async def get_optional_current_user(
+    db: AsyncSession = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> User | None:
+    """
+    Get the current user if authenticated, or None if not.
+
+    Useful for endpoints that work with or without authentication.
+    """
+    if not credentials:
+        return None
+
+    payload = decode_access_token(credentials.credentials)
+    if payload is None:
+        return None
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        return None
+
+    result = await db.execute(
+        select(User).where(User.id == UUID(user_id))
+    )
+    return result.scalar_one_or_none()
+
+
+# Type aliases for dependency injection
+CurrentUser = Annotated[User, Depends(get_current_user)]
+CurrentActiveUser = Annotated[User, Depends(get_current_active_user)]
+CurrentSuperuser = Annotated[User, Depends(get_current_superuser)]
+OptionalUser = Annotated[User | None, Depends(get_optional_current_user)]

@@ -1,57 +1,97 @@
-# AKASHI MAM - Development Environment
-# Usage: docker compose up -d
+# =============================================================================
+# AKASHI MAM - Docker Compose (Production-Ready)
+# =============================================================================
+# Uso:
+#   docker compose up                       -> Core services (dev)
+#   docker compose --profile workers up     -> Com Celery workers
+#   docker compose --profile monitoring up  -> Com observabilidade
+#   docker compose --profile all up         -> Tudo
+# =============================================================================
 
 services:
-  # ==========================================================================
-  # PostgreSQL 16 with pgvector
-  # ==========================================================================
+  # ===========================================================================
+  # CORE SERVICES
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 com pgvector
+  # ---------------------------------------------------------------------------
   postgres:
     image: pgvector/pgvector:pg16
     container_name: akashi-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: akashi
-      POSTGRES_PASSWORD: akashi_dev_2025
-      POSTGRES_DB: akashi_mam
+      POSTGRES_USER: ${POSTGRES_USER:-akashi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-akashi_dev_2025}
+      POSTGRES_DB: ${POSTGRES_DB:-akashi_mam}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U akashi -d akashi_mam"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-akashi} -d ${POSTGRES_DB:-akashi_mam}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - akashi-network
 
-  # ==========================================================================
-  # MinIO - S3-compatible object storage
-  # ==========================================================================
+  # ---------------------------------------------------------------------------
+  # MinIO (S3-compatible storage)
+  # ---------------------------------------------------------------------------
   minio:
     image: minio/minio:latest
     container_name: akashi-minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: akashi
-      MINIO_ROOT_PASSWORD: akashi_minio_2025
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-akashi}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-akashi_minio_2025}
     ports:
-      - "9000:9000"   # API
-      - "9001:9001"   # Console
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - akashi-network
 
-  # ==========================================================================
-  # Redis - Caching and rate limiting
-  # ==========================================================================
+  # ---------------------------------------------------------------------------
+  # MinIO Setup (create buckets on first run)
+  # ---------------------------------------------------------------------------
+  minio-setup:
+    image: minio/mc:latest
+    container_name: akashi-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set akashi http://minio:9000 $${MINIO_ROOT_USER:-akashi} $${MINIO_ROOT_PASSWORD:-akashi_minio_2025};
+      mc mb --ignore-existing akashi/akashi-originals;
+      mc mb --ignore-existing akashi/akashi-proxies;
+      mc mb --ignore-existing akashi/akashi-thumbnails;
+      mc anonymous set download akashi/akashi-thumbnails;
+      echo 'Buckets created successfully';
+      "
+    networks:
+      - akashi-network
+
+  # ---------------------------------------------------------------------------
+  # Redis (cache + Celery broker)
+  # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: akashi-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -59,19 +99,23 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - akashi-network
 
-  # ==========================================================================
-  # RabbitMQ - Job queue for workers
-  # ==========================================================================
+  # ---------------------------------------------------------------------------
+  # RabbitMQ (message broker for Celery)
+  # ---------------------------------------------------------------------------
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: akashi-rabbitmq
+    restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: akashi
-      RABBITMQ_DEFAULT_PASS: akashi_rabbit_2025
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-akashi}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-akashi_rabbit_2025}
+      RABBITMQ_DEFAULT_VHOST: akashi
     ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # Management UI
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -79,29 +123,212 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    networks:
+      - akashi-network
 
-  # ==========================================================================
-  # Elasticsearch - Full-text search (optional for MVP)
-  # ==========================================================================
-  # elasticsearch:
-  #   image: elasticsearch:8.11.0
-  #   container_name: akashi-elasticsearch
-  #   environment:
-  #     - discovery.type=single-node
-  #     - xpack.security.enabled=false
-  #     - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-  #   ports:
-  #     - "9200:9200"
-  #   volumes:
-  #     - elasticsearch_data:/usr/share/elasticsearch/data
+  # ===========================================================================
+  # APPLICATION SERVICES
+  # ===========================================================================
 
+  # ---------------------------------------------------------------------------
+  # AKASHI API (containerized)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: akashi-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-akashi}:${POSTGRES_PASSWORD:-akashi_dev_2025}@postgres:5432/${POSTGRES_DB:-akashi_mam}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-akashi}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-akashi_minio_2025}
+      - MINIO_SECURE=false
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-akashi}:${RABBITMQ_PASSWORD:-akashi_rabbit_2025}@rabbitmq:5672/akashi
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - api_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - akashi-network
+    profiles:
+      - app
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: akashi-worker
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-akashi}:${POSTGRES_PASSWORD:-akashi_dev_2025}@postgres:5432/${POSTGRES_DB:-akashi_mam}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-akashi}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-akashi_minio_2025}
+      - MINIO_SECURE=false
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-akashi}:${RABBITMQ_PASSWORD:-akashi_rabbit_2025}@rabbitmq:5672/akashi
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - worker_tmp:/app/tmp
+    networks:
+      - akashi-network
+    profiles:
+      - workers
+      - all
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat (scheduler)
+  # ---------------------------------------------------------------------------
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: akashi-beat
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-akashi}:${RABBITMQ_PASSWORD:-akashi_rabbit_2025}@rabbitmq:5672/akashi
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    networks:
+      - akashi-network
+    profiles:
+      - workers
+      - all
+
+  # ===========================================================================
+  # MONITORING STACK (optional)
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Prometheus (metrics collection)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: akashi-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - akashi-network
+    profiles:
+      - monitoring
+      - all
+
+  # ---------------------------------------------------------------------------
+  # Grafana (dashboards)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: akashi-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-akashi_grafana_2025}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - akashi-network
+    profiles:
+      - monitoring
+      - all
+
+  # ---------------------------------------------------------------------------
+  # Loki (logs aggregation)
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:latest
+    container_name: akashi-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - loki_data:/loki
+    networks:
+      - akashi-network
+    profiles:
+      - monitoring
+      - all
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  akashi-network:
+    driver: bridge
+    name: akashi-network
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
 volumes:
   postgres_data:
+    name: akashi-postgres-data
   minio_data:
+    name: akashi-minio-data
   redis_data:
+    name: akashi-redis-data
   rabbitmq_data:
-  # elasticsearch_data:
-
-networks:
-  default:
-    name: akashi-network
+    name: akashi-rabbitmq-data
+  api_logs:
+    name: akashi-api-logs
+  worker_tmp:
+    name: akashi-worker-tmp
+  prometheus_data:
+    name: akashi-prometheus-data
+  grafana_data:
+    name: akashi-grafana-data
+  loki_data:
+    name: akashi-loki-data

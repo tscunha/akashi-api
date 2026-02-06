@@ -9,6 +9,8 @@ from uuid import UUID
 from pydantic import Field
 
 from app.schemas.common import BaseSchema
+from app.schemas.keyword import KeywordSummary
+from app.schemas.marker import MarkerSummary
 
 
 # Type definitions
@@ -40,17 +42,19 @@ class StorageLocationRead(BaseSchema):
 class TechnicalMetadataRead(BaseSchema):
     """Technical metadata in response."""
 
-    width: int | None
-    height: int | None
-    frame_rate: float | None
-    duration_ms: int | None
-    video_codec: str | None
-    audio_codec: str | None
-    audio_channels: int | None
-    container_format: str | None
-    resolution_category: str | None
-    bit_depth: int | None
-    analyzed_at: datetime | None
+    width: int | None = None
+    height: int | None = None
+    frame_rate: float | None = None
+    video_codec: str | None = None
+    video_codec_profile: str | None = None
+    audio_codec: str | None = None
+    audio_channels: int | None = None
+    audio_sample_rate: int | None = None
+    container_format: str | None = None
+    resolution_category: str | None = None
+    bit_depth: int | None = None
+    aspect_ratio: str | None = None
+    analyzed_at: datetime | None = None
 
 
 class AssetBase(BaseSchema):
@@ -114,6 +118,8 @@ class AssetRead(AssetBase):
     # Nested
     storage_locations: list[StorageLocationRead] = []
     technical_metadata: TechnicalMetadataRead | None = None
+    keywords: list[KeywordSummary] = []
+    markers: list[MarkerSummary] = []
 
 
 class AssetSummary(BaseSchema):

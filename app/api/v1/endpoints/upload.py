@@ -3,6 +3,7 @@ AKASHI MAM API - Upload/Ingest Endpoints
 """
 
 import hashlib
+import logging
 import mimetypes
 from datetime import datetime
 from typing import Annotated
@@ -16,6 +17,8 @@ from app.api.deps import DbSession, get_tenant_by_code
 from app.models import Asset, AssetStorageLocation, IngestJob
 from app.schemas import IngestResponse, JobSummary, UploadResponse
 from app.services.storage_service import StorageService
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -168,9 +171,25 @@ async def ingest_file(
 
     await db.flush()
 
-    # TODO: Dispatch jobs to Celery workers
-    # from app.workers.tasks import process_asset
-    # process_asset.delay(str(asset.id))
+    # Dispatch jobs to Celery workers
+    try:
+        from app.workers.tasks.metadata import extract_metadata
+        from app.workers.tasks.proxy import generate_proxy
+        from app.workers.tasks.thumbnail import generate_thumbnail
+
+        for job in jobs:
+            if job.job_type == "metadata":
+                extract_metadata.delay(str(job.id), str(asset.id), storage_path)
+                logger.info(f"Dispatched metadata job {job.id}")
+            elif job.job_type == "proxy":
+                generate_proxy.delay(str(job.id), str(asset.id), storage_path)
+                logger.info(f"Dispatched proxy job {job.id}")
+            elif job.job_type == "thumbnail":
+                generate_thumbnail.delay(str(job.id), str(asset.id), storage_path)
+                logger.info(f"Dispatched thumbnail job {job.id}")
+    except Exception as e:
+        # Log but don't fail - jobs are in DB and can be processed later
+        logger.warning(f"Failed to dispatch Celery tasks: {e}. Jobs saved to DB for later processing.")
 
     return IngestResponse(
         asset_id=asset.id,

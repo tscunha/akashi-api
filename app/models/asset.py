@@ -6,9 +6,9 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Date, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import BigInteger, Date, ForeignKey, Index, String, Text, and_
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship, foreign
 
 from app.models.base import Base, ExtraMixin, SoftDeleteMixin, TimestampMixin
 
@@ -110,6 +110,9 @@ class Asset(Base, TimestampMixin, SoftDeleteMixin, ExtraMixin):
     file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Full-text search vector (auto-updated by trigger)
+    search_vector: Mapped[Any | None] = mapped_column(TSVECTOR, nullable=True)
+
     # Audit
     created_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
@@ -118,21 +121,40 @@ class Asset(Base, TimestampMixin, SoftDeleteMixin, ExtraMixin):
         "Tenant",
         back_populates="assets",
     )
+    # Note: These relationships use primaryjoin with foreign() because assets
+    # is a partitioned table without formal FKs from related tables
     storage_locations: Mapped[list["AssetStorageLocation"]] = relationship(  # noqa: F821
         "AssetStorageLocation",
-        back_populates="asset",
+        primaryjoin="Asset.id == foreign(AssetStorageLocation.asset_id)",
         lazy="selectin",
+        viewonly=True,
     )
     technical_metadata: Mapped["AssetTechnicalMetadata | None"] = relationship(  # noqa: F821
         "AssetTechnicalMetadata",
-        back_populates="asset",
+        primaryjoin="Asset.id == foreign(AssetTechnicalMetadata.asset_id)",
         uselist=False,
         lazy="selectin",
+        viewonly=True,
     )
     ingest_jobs: Mapped[list["IngestJob"]] = relationship(  # noqa: F821
         "IngestJob",
-        back_populates="asset",
+        primaryjoin="Asset.id == foreign(IngestJob.asset_id)",
         lazy="dynamic",
+        viewonly=True,
+    )
+    keywords: Mapped[list["AssetKeyword"]] = relationship(  # noqa: F821
+        "AssetKeyword",
+        primaryjoin="Asset.id == foreign(AssetKeyword.asset_id)",
+        lazy="selectin",
+        viewonly=True,
+        order_by="AssetKeyword.start_ms.nulls_last(), AssetKeyword.keyword",
+    )
+    markers: Mapped[list["AssetMarker"]] = relationship(  # noqa: F821
+        "AssetMarker",
+        primaryjoin="Asset.id == foreign(AssetMarker.asset_id)",
+        lazy="selectin",
+        viewonly=True,
+        order_by="AssetMarker.start_ms",
     )
 
     def __repr__(self) -> str:

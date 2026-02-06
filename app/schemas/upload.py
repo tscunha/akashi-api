@@ -64,6 +64,7 @@ class JobSummary(BaseSchema):
     status: JobStatus
     progress: int
     created_at: datetime
+    error_message: str | None = None
 
 
 class JobRead(BaseSchema):

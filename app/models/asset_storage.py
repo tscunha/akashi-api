@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import BigInteger, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, ExtraMixin
 
@@ -90,11 +90,8 @@ class AssetStorageLocation(Base, ExtraMixin):
     migrated_at: Mapped[datetime | None] = mapped_column(nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
-    # Relationships
-    asset: Mapped["Asset"] = relationship(  # noqa: F821
-        "Asset",
-        back_populates="storage_locations",
-    )
+    # Note: No relationship defined here because Asset is a partitioned table
+    # Access to asset should be done via explicit queries using asset_id
 
     def __repr__(self) -> str:
         return f"<AssetStorageLocation(asset_id={self.asset_id}, purpose={self.purpose}, bucket={self.bucket})>"
@@ -193,11 +190,8 @@ class AssetTechnicalMetadata(Base):
         nullable=False,
     )
 
-    # Relationships
-    asset: Mapped["Asset"] = relationship(  # noqa: F821
-        "Asset",
-        back_populates="technical_metadata",
-    )
+    # Note: No relationship defined here because Asset is a partitioned table
+    # Access to asset should be done via explicit queries using asset_id
 
     def __repr__(self) -> str:
         return f"<AssetTechnicalMetadata(asset_id={self.asset_id}, {self.width}x{self.height})>"
@@ -260,11 +254,8 @@ class IngestJob(Base):
         server_default="{}",
     )
 
-    # Relationships
-    asset: Mapped["Asset"] = relationship(  # noqa: F821
-        "Asset",
-        back_populates="ingest_jobs",
-    )
+    # Note: No relationship defined here because Asset is a partitioned table
+    # Access to asset should be done via explicit queries using asset_id
 
     def __repr__(self) -> str:
         return f"<IngestJob(id={self.id}, type={self.job_type}, status={self.status})>"
