@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, Pagination, get_tenant_by_code
 from app.models import Asset, Tenant
+from app.models.asset_storage import AssetStorageLocation
 from app.schemas import (
     AssetCreate,
     AssetUpdate,
@@ -21,6 +22,10 @@ from app.schemas import (
     AssetListResponse,
     MessageResponse,
 )
+from app.services.storage_service import StorageService
+
+# Initialize storage service for URL generation
+storage_service = StorageService()
 
 
 router = APIRouter()
@@ -70,20 +75,47 @@ async def list_assets(
     result = await db.execute(query)
     assets = result.scalars().all()
 
-    # Map to summary
-    items = [
-        AssetSummary(
-            id=asset.id,
-            title=asset.title,
-            asset_type=asset.asset_type,
-            status=asset.status,
-            duration_ms=asset.duration_ms,
-            file_size_bytes=asset.file_size_bytes,
-            thumbnail_url=None,  # TODO: Generate presigned URL
-            created_at=asset.created_at,
+    # Get asset IDs for thumbnail lookup
+    asset_ids = [asset.id for asset in assets]
+
+    # Fetch thumbnail storage locations
+    thumbnail_query = (
+        select(AssetStorageLocation)
+        .where(
+            AssetStorageLocation.asset_id.in_(asset_ids),
+            AssetStorageLocation.purpose == "thumbnail",
+            AssetStorageLocation.is_accessible == True,
         )
-        for asset in assets
-    ]
+    )
+    thumbnail_result = await db.execute(thumbnail_query)
+    thumbnails = {loc.asset_id: loc for loc in thumbnail_result.scalars().all()}
+
+    # Map to summary with thumbnail URLs
+    items = []
+    for asset in assets:
+        thumbnail_url = None
+        if asset.id in thumbnails:
+            thumb = thumbnails[asset.id]
+            if thumb.bucket and thumb.path:
+                try:
+                    thumbnail_url = await storage_service.get_presigned_url(
+                        thumb.bucket, thumb.path, expires_in=3600
+                    )
+                except Exception:
+                    pass  # Skip if URL generation fails
+
+        items.append(
+            AssetSummary(
+                id=asset.id,
+                title=asset.title,
+                asset_type=asset.asset_type,
+                status=asset.status,
+                duration_ms=asset.duration_ms,
+                file_size_bytes=asset.file_size_bytes,
+                thumbnail_url=thumbnail_url,
+                created_at=asset.created_at,
+            )
+        )
 
     pages = (total + pagination.page_size - 1) // pagination.page_size if pagination.page_size > 0 else 0
 
