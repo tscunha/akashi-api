@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     search,
     upload,
 )
+from app.api.v1.endpoints import transcriptions, faces, scenes
 
 
 api_router = APIRouter()
@@ -31,3 +32,8 @@ api_router.include_router(jobs.router, prefix="/jobs", tags=["Jobs"])
 # Keywords and Markers (routes include /assets/{id}/keywords and /keywords/{id})
 api_router.include_router(keywords.router, tags=["Keywords"])
 api_router.include_router(markers.router, tags=["Markers"])
+
+# AI Processing endpoints
+api_router.include_router(transcriptions.router, prefix="/assets", tags=["Transcriptions"])
+api_router.include_router(faces.router, tags=["Faces & Persons"])
+api_router.include_router(scenes.router, prefix="/assets", tags=["Scene Descriptions"])

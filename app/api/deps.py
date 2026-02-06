@@ -10,10 +10,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_db as _get_db
 from app.core.security import decode_access_token
 from app.models import Tenant, User
 from app.schemas import PaginationParams
+
+
+# Re-export get_db for convenience
+get_db = _get_db
 
 
 # HTTP Bearer token security scheme
@@ -21,7 +25,7 @@ security = HTTPBearer(auto_error=False)
 
 
 # Type aliases for dependency injection
-DbSession = Annotated[AsyncSession, Depends(get_db)]
+DbSession = Annotated[AsyncSession, Depends(_get_db)]
 
 
 async def get_tenant_by_code(
@@ -162,3 +166,18 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentActiveUser = Annotated[User, Depends(get_current_active_user)]
 CurrentSuperuser = Annotated[User, Depends(get_current_superuser)]
 OptionalUser = Annotated[User | None, Depends(get_optional_current_user)]
+
+
+async def get_tenant_id(
+    current_user: User = Depends(get_current_user),
+) -> UUID:
+    """
+    Get the tenant ID from the current authenticated user.
+
+    Returns the tenant_id of the authenticated user.
+    """
+    return current_user.tenant_id
+
+
+# Type alias for tenant ID
+TenantId = Annotated[UUID, Depends(get_tenant_id)]

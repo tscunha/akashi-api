@@ -1,6 +1,7 @@
 """
 AKASHI MAM API - Search Endpoints
 Full-text search using PostgreSQL tsvector.
+Multimodal search across transcriptions, faces, scenes, and metadata.
 """
 
 import logging
@@ -8,13 +9,21 @@ import time
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, literal_column, select, text
 from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import DbSession, OptionalUser, Pagination, get_tenant_by_code
+from app.api.deps import DbSession, OptionalUser, Pagination, get_tenant_by_code, get_db, get_tenant_id, get_current_user
 from app.models import Asset, AssetKeyword
+from app.models.user import User
 from app.schemas import SearchResponse, SearchResult, SearchSuggestion
+from app.schemas.search import (
+    MultimodalSearchRequest,
+    MultimodalSearchResponse,
+    SearchSuggestion as SearchSuggestionSchema,
+)
+from app.services.search_service import search_service
 
 
 logger = logging.getLogger(__name__)
@@ -364,3 +373,46 @@ async def advanced_search(
         results=results,
         search_time_ms=search_time_ms,
     )
+
+
+# ======================
+# Multimodal Search
+# ======================
+
+
+@router.post("/multimodal", response_model=MultimodalSearchResponse)
+async def multimodal_search(
+    request: MultimodalSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Multimodal search across all data sources.
+
+    Searches in:
+    - Transcriptions (speech-to-text)
+    - Scene descriptions (vision AI)
+    - Faces (similarity matching with uploaded image)
+    - Keywords (manual and AI-extracted)
+    - Metadata (title, description)
+
+    Results are ranked using Reciprocal Rank Fusion (RRF) to combine
+    scores from different sources.
+    """
+    return await search_service.search(db, request, tenant_id)
+
+
+@router.get("/multimodal/suggestions", response_model=list[SearchSuggestionSchema])
+async def get_multimodal_suggestions(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(10, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_tenant_id),
+):
+    """
+    Get search suggestions for multimodal search.
+
+    Suggests keywords, person names, and collection names.
+    """
+    return await search_service.get_suggestions(db, q, tenant_id, limit)

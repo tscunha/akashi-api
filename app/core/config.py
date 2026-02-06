@@ -80,6 +80,25 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 10240  # 10GB
     chunk_size_mb: int = 10
 
+    # AI Processing - Whisper
+    whisper_mode: str = "local"  # local or api
+    whisper_model: str = "base"  # tiny, base, small, medium, large-v3
+    whisper_language: str = "pt"
+    whisper_device: str = "cpu"  # cuda or cpu
+
+    # AI Processing - Face Recognition
+    face_model: str = "buffalo_l"  # InsightFace model
+    face_min_confidence: float = 0.5
+    face_sample_interval: float = 1.0  # seconds between samples
+
+    # AI Processing - Vision
+    vision_mode: str = "api"  # api or local
+    vision_model: str = "gpt-4-vision-preview"
+    vision_sample_interval: int = 10  # seconds between frames
+
+    # OpenAI API
+    openai_api_key: str | None = None
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, v: str) -> str:
