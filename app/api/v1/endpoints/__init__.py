@@ -3,6 +3,7 @@ AKASHI MAM API - Endpoints
 """
 
 from app.api.v1.endpoints import (
+    api_keys,
     assets,
     auth,
     collections,
@@ -15,6 +16,7 @@ from app.api.v1.endpoints import (
 )
 
 __all__ = [
+    "api_keys",
     "assets",
     "auth",
     "collections",

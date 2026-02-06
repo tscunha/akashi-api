@@ -5,6 +5,7 @@ AKASHI MAM API - API v1 Router
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    api_keys,
     assets,
     auth,
     collections,
@@ -37,3 +38,7 @@ api_router.include_router(markers.router, tags=["Markers"])
 api_router.include_router(transcriptions.router, prefix="/assets", tags=["Transcriptions"])
 api_router.include_router(faces.router, tags=["Faces & Persons"])
 api_router.include_router(scenes.router, prefix="/assets", tags=["Scene Descriptions"])
+
+# API Keys (for MCP and external integrations)
+api_router.include_router(api_keys.router, tags=["API Keys"])
+
